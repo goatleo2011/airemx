@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AireMX</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f2fafa;
+}
+
+header {
+  background: #00acc1;
+  color: white;
+  padding: 12px;
+  text-align: center;
+}
+
+#viewToggle {
+  margin-top: 8px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 20px;
+  background: white;
+  color: #00acc1;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+#container {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  height: calc(100vh - 110px);
+}
+
+#map {
+  height: 100%;
+}
+
+#panel {
+  background: white;
+  padding: 15px;
+  overflow-y: auto;
+}
+
+section {
+  margin-bottom: 20px;
+}
+
+button, select, textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px;
+}
+
+button {
+  background: #00acc1;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.stats span {
+  display: block;
+  margin: 4px 0;
+}
+
+/* MOBILE MODE */
+body.mobile #container {
+  grid-template-columns: 1fr;
+}
+
+body.mobile #panel {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 45%;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  box-shadow: 0 -4px 15px rgba(0,0,0,0.2);
+  z-index: 1000;
+}
+
+body.mobile #map {
+  height: 55%;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>🌎 AireMX</h1>
+  <p>Community Air Intelligence for CDMX</p>
+  <button id="viewToggle">📱 Mobile View</button>
+</header>
+
+<div id="container">
+  <div id="map"></div>
+
+  <div id="panel">
+
+    <section>
+      <h3>📊 Live AQI</h3>
+      <p id="aqiValue">Loading…</p>
+    </section>
+
+    <section>
+      <h3>🚲 Eco Route Planner</h3>
+      <button id="useMyLocation">📍 Use My Location (Live)</button>
+      <button id="stopTracking">⛔ Stop Tracking</button>
+      <button id="startRoute">Select Start (Map)</button>
+      <button id="endRoute">Select Destination</button>
+      <button id="drawRoute">Plan Eco Route</button>
+      <p id="routeStatus"></p>
+    </section>
+
+    <section>
+      <h3>📝 Report Pollution</h3>
+
+      <label>Severity</label>
+      <select id="level">
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+
+      <label>Source</label>
+      <select id="source">
+        <option>Traffic</option>
+        <option>Industry</option>
+        <option>Fires</option>
+        <option>Garbage</option>
+        <option>Construction</option>
+        <option>Other</option>
+      </select>
+
+      <textarea id="reason" placeholder="Describe the situation"></textarea>
+      <button id="submit">Submit Report</button>
+      <small>Click map to choose area</small>
+    </section>
+
+    <section class="stats">
+      <h3>📈 Reports</h3>
+      <span>🔴 High: <b id="high">0</b></span>
+      <span>🟠 Medium: <b id="medium">0</b></span>
+      <span>🟡 Low: <b id="low">0</b></span>
+    </section>
+
+  </div>
+</div>
+
+<script>
+/* KEYS */
+const ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImQ1YjZhNzFlNzhjZTQzMzc4YmRlNTA0YmIwZGY1ZTIyIiwiaCI6Im11cm11cjY0In0=";
+const AQI_TOKEN = "85eaaa1d65eb2274b9e907d2aeca8dcdafcf742b";
+
+/* MAP */
+const map = L.map("map").setView([19.4326, -99.1332], 11);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+/* VIEW TOGGLE */
+viewToggle.onclick = () => {
+  document.body.classList.toggle("mobile");
+  viewToggle.textContent = document.body.classList.contains("mobile")
+    ? "🖥️ Desktop View"
+    : "📱 Mobile View";
+  setTimeout(() => map.invalidateSize(), 300);
+};
+
+/* AQI */
+async function loadAQI() {
+  const r = await fetch(`https://api.waqi.info/feed/mexico-city/?token=${AQI_TOKEN}`);
+  const d = await r.json();
+  if (d.status === "ok") aqiValue.textContent = `AQI CDMX: ${d.data.aqi}`;
+}
+loadAQI();
+
+/* REPORTS */
+let selectedPoint = null;
+let reports = [];
+let heatLayer = null;
+
+map.on("click", e => selectedPoint = e.latlng);
+
+function updateHeat() {
+  if (heatLayer) map.removeLayer(heatLayer);
+  heatLayer = L.heatLayer(reports, { radius: 30, blur: 20 }).addTo(map);
+}
+
+function updateStats() {
+  high.textContent = reports.filter(r => r[2] === 1).length;
+  medium.textContent = reports.filter(r => r[2] === 0.6).length;
+  low.textContent = reports.filter(r => r[2] === 0.3).length;
+}
+
+submit.onclick = () => {
+  if (!selectedPoint) return alert("Click map first");
+  const lvl = level.value;
+  const w = lvl === "high" ? 1 : lvl === "medium" ? 0.6 : 0.3;
+  reports.push([selectedPoint.lat, selectedPoint.lng, w]);
+  updateHeat();
+  updateStats();
+  selectedPoint = null;
+};
+
+/* ROUTING + LIVE GPS */
+let start, end, route;
+let liveMarker = null;
+let watchId = null;
+
+useMyLocation.onclick = () => {
+  if (!navigator.geolocation) return alert("Geolocation not supported");
+
+  routeStatus.textContent = "Live tracking enabled…";
+
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const latlng = {
+      lat: pos.coords.latitude,
+      lng: pos.coords.longitude
+    };
+    start = latlng;
+
+    if (!liveMarker) {
+      liveMarker = L.marker(latlng).addTo(map).bindPopup("📍 You");
+    } else {
+      liveMarker.setLatLng(latlng);
+    }
+
+    map.panTo(latlng);
+  }, () => alert("Location error"), {
+    enableHighAccuracy: true,
+    maximumAge: 3000,
+    timeout: 5000
+  });
+};
+
+stopTracking.onclick = () => {
+  if (watchId) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    routeStatus.textContent = "Live tracking stopped.";
+  }
+};
+
+startRoute.onclick = () => map.once("click", e => {
+  start = e.latlng;
+  L.marker(start).addTo(map).bindPopup("Start");
+});
+
+endRoute.onclick = () => map.once("click", e => {
+  end = e.latlng;
+  L.marker(end).addTo(map).bindPopup("End");
+});
+
+drawRoute.onclick = async () => {
+  if (!start || !end) return alert("Select start and destination");
+
+  const res = await fetch(
+    "https://api.openrouteservice.org/v2/directions/cycling-regular/geojson",
+    {
+      method: "POST",
+      headers: {
+        Authorization: ORS_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        coordinates: [[start.lng, start.lat], [end.lng, end.lat]]
+      })
+    }
+  );
+
+  const data = await res.json();
+  if (route) map.removeLayer(route);
+  route = L.geoJSON(data, { style: { color: "#00acc1", weight: 5 } }).addTo(map);
+  map.fitBounds(route.getBounds());
+};
+</script>
+
+</body>
+</html>
